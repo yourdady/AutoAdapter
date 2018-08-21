@@ -14,7 +14,8 @@ MODEL_NAME = 'model.ckpt'
 class autoAdapter():
     def __init__(self, input_dim, new_dim, n_classes, model_path = None, lamb = 0.01, learning_rate = 0.01
                  , batch_size_src = 128, batch_size_tar = 128, training_steps = 5000, l2 = 0.001,
-                 optimizer = 'GD', save_step = 20, print_step = 20):
+                 optimizer = 'GD', save_step = 20, print_step = 20, kernel_type = 'linear', sigma_list=None,
+                 ** kernel_param):
         """
         
         :param input_dim: 
@@ -30,6 +31,8 @@ class autoAdapter():
         :param optimizer: 
         :param save_step: 
         :param print_step: 
+        :param kernel_type: 
+        :param kernel_param: 
         """
         self.model_path = model_path
         self.input_dim = input_dim
@@ -44,15 +47,18 @@ class autoAdapter():
         self.optimizer = optimizer
         self.save_step = save_step
         self.print_step = print_step
-
-    def dann(self, Xsrc, Xtar):
+        self.kernel_type = kernel_type
+        self.kernel_param = kernel_param
+        self.sigma_list = sigma_list
+    def dann(self, Xsrc=None, Xtar=None):
         """
         
         :param Xsrc: 
         :param Xtar: 
         :return: 
         """
-
+        if Xtar is None:
+            raise TypeError("Xtar is None??")
         def fully_connected(input_layer, weights, biases):
             return tf.add(tf.matmul(input_layer, weights), biases)
 
@@ -61,25 +67,28 @@ class autoAdapter():
                                         initializer=tf.truncated_normal_initializer(stddev=1))
             bias_1 = tf.get_variable("bias_1", shape = [self.new_dim],
                                      initializer=tf.truncated_normal_initializer(stddev=1))
-            hidden_layer_src = tf.nn.relu(fully_connected(Xsrc, weights_1, bias_1))
+            hidden_layer_src = None
+            if Xsrc is not None:
+                hidden_layer_src = tf.nn.relu(fully_connected(Xsrc, weights_1, bias_1))
             hidden_layer_tar = tf.nn.relu(fully_connected(Xtar, weights_1, bias_1))
 
         with tf.name_scope("layer2"):
             weights_2 = tf.get_variable("weights_2",shape = [self.new_dim, self.n_classes],
                                         initializer=tf.truncated_normal_initializer(stddev=1))
-            # bias_2 = tf.get_variable("bias_2", shape = [self.n_classes],
-            #                          initializer=tf.truncated_normal_initializer(stddev=1))
-            # tf.add_to_collection("losses", tf.contrib.layers.l2_regularizer(self.l2)(weights_2))
-            # logits = fully_connected(hidden_layer_src, weights_2, bias_2)
-            logits = tf.matmul(hidden_layer_src, weights_2)
+            bias_2 = tf.get_variable("bias_2", shape = [self.n_classes],
+                                     initializer=tf.truncated_normal_initializer(stddev=1))
+            tf.add_to_collection("losses", tf.contrib.layers.l2_regularizer(self.l2)(weights_2))
+            logits = None
+            if Xsrc is not None:
+                logits = fully_connected(hidden_layer_src, weights_2, bias_2)
+
         global saver
         saver = tf.train.Saver([
             weights_1,
             bias_1,
             weights_2,
-            # bias_2
+            bias_2
         ])
-
         return logits, hidden_layer_src, hidden_layer_tar
 
 
@@ -90,12 +99,11 @@ class autoAdapter():
         :param f_of_Y: 
         :return: 
         """
-        loss = 0.0
         delta = f_of_X_src - f_of_X_tar
         loss = tf.reduce_mean(tf.matmul(delta, tf.transpose(delta)))
         return loss
 
-    def poly_mmd2(self, f_of_X, f_of_Y, d=1, alpha=1.0, c=2.0):
+    def poly_mmd2(self, f_of_X, f_of_Y, kernel_param):
         """
         
         :param f_of_X: 
@@ -105,16 +113,29 @@ class autoAdapter():
         :param c: 
         :return: 
         """
-        K_XX = alpha * (f_of_X[:-1] * f_of_X[1:]).sum(1) + c
+        try:
+            alpha = kernel_param["alpha"]
+        except KeyError:
+            alpha = 1.0
+        try:
+            d = kernel_param["d"]
+        except KeyError:
+            d = 1
+        try:
+            c = kernel_param["c"]
+        except KeyError:
+            c = 2.0
+
+        K_XX = (tf.reduce_sum(alpha * (f_of_X[:-1] * f_of_X[1:]), 1) + c)
         K_XX_mean = tf.reduce_mean(tf.pow(K_XX,d))
 
-        K_YY = (alpha * (f_of_Y[:-1] * f_of_Y[1:]).sum(1) + c)
+        K_YY = (tf.reduce_sum(alpha * (f_of_Y[:-1] * f_of_Y[1:]), 1) + c)
         K_YY_mean = tf.reduce_mean(tf.pow(K_YY,d))
 
-        K_XY = (alpha * (f_of_X[:-1] * f_of_Y[1:]).sum(1) + c)
+        K_XY = (tf.reduce_sum(alpha * (f_of_X[:-1] * f_of_Y[1:]), 1) + c)
         K_XY_mean = tf.reduce_mean(tf.pow(K_XY,d))
 
-        K_YX = (alpha * (f_of_Y[:-1] * f_of_X[1:]).sum(1) + c)
+        K_YX = (tf.reduce_sum(alpha * (f_of_Y[:-1] * f_of_X[1:]), 1) + c)
         K_YX_mean = tf.reduce_mean(tf.pow(K_YX,d))
 
         loss = K_XX_mean + K_YY_mean - K_XY_mean - K_YX_mean
@@ -131,15 +152,20 @@ class autoAdapter():
         :return: 
         """
         # K_SS, K_ST, K_TT, d
-        K_XX, K_XY, K_YY, d = self._mix_rbf_kernel(X, Y, sigma_list)
+        K_XX, K_XY, K_YY, d = self._mix_rbf_kernel(X_src, X_tar, sigma_list)
 
         return self._mmd2(K_XX, K_XY, K_YY, const_diagonal=False, biased=biased)
 
     def mix_rbf_mm2_ratio(self):
-
         pass
 
-    def fit(self, data_src, data_tar, onehot=False):
+    def mmd(self, X_src, X_tar):
+        X_src_mean = np.mean(X_src, axis=0)
+        X_tar_mean = np.mean(X_tar, axis=0)
+        mmd = np.sum((X_src_mean-X_tar_mean)**2)
+        return mmd
+
+    def fit(self, data_src, data_tar, onehot=False, plot = False):
         """
         
         :param data_src: 
@@ -156,11 +182,18 @@ class autoAdapter():
             output, hidden_src, hidden_tar = self.dann(X_src_placeholder, X_tar_placeholder)
 
             loss_y = tf.nn.softmax_cross_entropy_with_logits(logits=output, labels=y_placeholder)
-            loss_mmd = tf.constant(0, dtype='float')
+            if self.kernel_type == 'linear':
+                loss_mmd = self.linear_mmd2(hidden_src, hidden_tar)
+            if self.kernel_type == 'poly':
+                loss_mmd = self.poly_mmd2(hidden_src, hidden_tar, self.kernel_param)
+            if self.kernel_type == 'rbf':
+                if self.sigma_list is None:
+                    raise ValueError("sigma list is None??")
+                loss_mmd = self.mix_rbf_mmd2(hidden_src, hidden_tar, sigma_list=self.sigma_list)
+            else:
+                loss_mmd = tf.constant(0, dtype='float')
             loss_y_mean = tf.reduce_mean(loss_y)
-            # loss = tf.constant(self.lamb) * loss_mmd + loss_y_mean + tf.add_n(tf.get_collection('losses'))
-            # loss = loss_y_mean
-            loss = self.linear_mmd2(hidden_src, hidden_tar) + loss_y_mean
+            loss = tf.constant(self.lamb) * loss_mmd + loss_y_mean + tf.add_n(tf.get_collection('losses'))
 
             if self.optimizer == 'GD':
                 train_step = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
@@ -184,7 +217,8 @@ class autoAdapter():
 
                     if onehot == False:
                         ys = self._transformlabel(ys, self.n_classes)
-                    _, loss_, loss_y_mean_, loss_mmd_, output_ = sess.run([train_step, loss, loss_y_mean, loss_mmd, output,],
+                    _, loss_, loss_y_mean_, loss_mmd_, output_, hidden_src_, hidden_tar_ = sess.run([train_step, loss, loss_y_mean, loss_mmd, output,
+                                                                           hidden_src, hidden_tar],
                                                               feed_dict={
                                                                   X_src_placeholder: xs,
                                                                   X_tar_placeholder: xt,
@@ -197,62 +231,34 @@ class autoAdapter():
                               "\n loss_y on training batch is:{}"
                               "\n loss on training batch is:{}".format(i, loss_mmd_, loss_y_mean_, loss_))
                         print("accuracy on train set:{}".format(acc))
-
+                        print("mmd: ", self.mmd(hidden_src_, hidden_tar_))
                     if i%self.save_step == 0:
                         saver.save(sess, os.path.join(MODEL_SAVE_PATH, MODEL_NAME), global_step=global_step)
 
     def transform(self, X):
-        #加载模型
-        pass
-        # with tf.Graph().as_default() as g:
-        #     # 定义输入输出的格式
-        #     x = tf.placeholder(tf.float32, [
-        #         # NUM_EXAMPLES,           # 第一维表示样例的个数
-        #         len(X),
-        #         IMAGE_SIZE,  # 第二维和第三维表示图片的尺寸
-        #         IMAGE_SIZE,
-        #         NUM_CHANNELS],  # 第四维表示图片的深度，对于RBG格式的图片，深度为5
-        #                        name='x-input')
-        #     y_ = tf.placeholder(tf.float32, [None, OUTPUT_NODE], name='y-input')
-        #
-        #
-        #     validate_feed = {x: np.reshape(X, (len(X),
-        #                                      IMAGE_SIZE,
-        #                                      IMAGE_SIZE,
-        #                                      NUM_CHANNELS)),
-        #                                      y_: Y}
-        #
-        #     # 直接通过调用封装好的函数来计算前向传播的结果。
-        #     # 因为测试时不关注正则损失的值，所以这里用于计算正则化损失的函数被设置为None。
-        #     y = mnist_inference.inference(x, False, None)
-        #     y = tf.nn.softmax(y, name=None)
-        #     # 使用前向传播的结果计算正确率。
-        #     # 如果需要对未知的样例进行分类，那么使用tf.argmax(y, 1)就可以得到输入样例的预测类别了。
-        #     correct_prediction = tf.equal(tf.argmax(y, 1), tf.argmax(y_, 1))
-        #     accuracy = tf.reduce_mean(tf.cast(correct_prediction, tf.float32))
-        #
-        #
-        #     variable_to_restore = variable_averages.variables_to_restore()
-        #     saver = tf.train.Saver(variable_to_restore)
-        #
-        #     with tf.Session() as sess:
-        #         # tf.train.get_checkpoint_state函数会通过checkpoint文件自动找到目录中最新模型的文件名
-        #         ckpt = tf.train.get_checkpoint_state(ESITIMATOR_MODEL_PATH)
-        #         if ckpt and ckpt.model_checkpoint_path:
-        #             # 加载模型
-        #             saver.restore(sess, (ESITIMATOR_MODEL_PATH+MODEL_NAME+'-{}').format(self._iboost))
-        #             # 通过文件名得到模型保存时迭代的轮数
-        #             global_step = self._iboost
-        #             result, accuracy_score = sess.run([y, accuracy], feed_dict=validate_feed)
-        #             print("After %s training step(s), validation accuracy = %f" % (global_step, accuracy_score))
-        #             return result
-        #         else:
-        #             print("No checkpoint file found")
-        #             return
+        with tf.Graph().as_default() as g:
+            x = tf.placeholder(tf.float32, [
+                len(X),
+                self.input_dim],name='x-input')
+
+            _,_,X_new = self.dann(Xsrc=None, Xtar=X)
+            saver = tf.train.Saver()
+
+            with tf.Session() as sess:
+                ckpt = tf.train.get_checkpoint_state(MODEL_SAVE_PATH)
+                if ckpt and ckpt.model_checkpoint_path:
+                    saver.restore(sess, ckpt.model_checkpoint_path)
+                    X_new = sess.run([X_new], feed_dict={x: X})
+                    print("X_new : ", X_new[0])
+                    print("shape : ", np.array(X_new).shape)
+                    return X_new
+                else:
+                    print("No checkpoint file found")
+                    raise FileNotFoundError
 
 
 
-    ################################################################################
+    ###############################################################################
     # Helper functions to compute variances based on kernel matrices
     ################################################################################
 
