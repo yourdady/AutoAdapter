@@ -8,6 +8,7 @@ import tensorflow as tf
 import numpy as np
 import os
 from sklearn.metrics.scorer import accuracy_score
+import matplotlib.pyplot as plt
 MODEL_SAVE_PATH = './model'
 MODEL_NAME = 'model.ckpt'
 
@@ -17,22 +18,28 @@ class autoAdapter():
                  optimizer = 'GD', save_step = 20, print_step = 20, kernel_type = 'linear', sigma_list=None,
                  ** kernel_param):
         """
+        An auto Adapter to minimize the training loss on source data MMD between 2 source and target 
+        domains at the same time, which looks like an nn-version JDA algorithm. When the dataset is 
+        too large, the time complexity of TCA or JDA would be too high, auto Adapter support stream 
+        input so the scope of application is wider.
         
-        :param input_dim: 
-        :param new_dim: 
-        :param n_classes: 
-        :param model_path: 
-        :param lamb: 
-        :param learning_rate: 
-        :param batch_size_src: 
-        :param batch_size_tar: 
-        :param training_steps: 
-        :param l2: 
-        :param optimizer: 
-        :param save_step: 
-        :param print_step: 
-        :param kernel_type: 
-        :param kernel_param: 
+        
+        :param input_dim: int, dimension of original features.
+        :param new_dim: int, dimension of new features.
+        :param n_classes: int, class number.
+        :param model_path: str, path to store the fitted model.
+        :param lamb: float, coefficient for mmd loss, 0.01 by default.
+        :param learning_rate: float, learning rate of optimizer, 0.01 by default.
+        :param batch_size_src: int, batch size of source data, 128 by default.
+        :param batch_size_tar: int, batch size of target data, 128 by default.
+        :param training_steps: int, 5000 by default.
+        :param l2: float, coefficient for l2 regularization, 0.001 by default.
+        :param optimizer: str, optimizer:'GD', 'Ada', 'Adg' 
+        :param save_step: int, save model each save step, 20 by default.
+        :param print_step: int, print result each print step, 20 by default.
+        :param kernel_type: str, 'linear', 'poly' or 'rbf'.
+        :param kernel_param: dict, for poly kernle, {"alpha": 1.0, "d": 2, "c": 0.0} for instance. 
+        :param sigma_list: list, for rbf kernel.
         """
         self.model_path = model_path
         self.input_dim = input_dim
@@ -53,12 +60,15 @@ class autoAdapter():
     def dann(self, Xsrc=None, Xtar=None):
         """
         
-        :param Xsrc: 
-        :param Xtar: 
-        :return: 
+        :param Xsrc: 2d tensor with shape=[#batch_src, input_dim], feature Matrix of source data. 
+        :param Xtar: 2d tensor with shape=[#batch_tar, input_dim], feature Matrix of target data.
+        :return: logits, 2d tensor with shape=[#batch_src, output_dim],
+                hiddenlayer_src, 2d tensor with shape=[#batch_src, new_dim]
+                hiddenlayer_tar, 2d tensor with shape=[#batch_tar, new_dim]
+
         """
         if Xtar is None:
-            raise TypeError("Xtar is None??")
+            raise TypeError("Forget to input Xtar ??")
         def fully_connected(input_layer, weights, biases):
             return tf.add(tf.matmul(input_layer, weights), biases)
 
@@ -92,26 +102,26 @@ class autoAdapter():
         return logits, hidden_layer_src, hidden_layer_tar
 
 
-    def linear_mmd2(self, f_of_X_src, f_of_X_tar):
+    def linear_mmd2(self, X_src, X_tar):
         """
         
-        :param f_of_X: 
-        :param f_of_Y: 
-        :return: 
+        :param X_src:  2d tensor with shape=[#batch_src, input_dim]
+        :param X_tar:  2d atensor with shape=[#batch_tar, input_dim]
+        :return: linear mmd loss
         """
-        delta = f_of_X_src - f_of_X_tar
+        delta = X_src - X_tar
         loss = tf.reduce_mean(tf.matmul(delta, tf.transpose(delta)))
         return loss
 
-    def poly_mmd2(self, f_of_X, f_of_Y, kernel_param):
+    def poly_mmd2(self, X_src, X_tar, kernel_param):
         """
         
-        :param f_of_X: 
-        :param f_of_Y: 
+        :param f_of_X: 2d tensor with shape=[#batch_src, new_dim]
+        :param f_of_Y: 2d atensor with shape=[#batch_tar, new_dim]
         :param d: 
         :param alpha: 
         :param c: 
-        :return: 
+        :return: poly mmd loss
         """
         try:
             alpha = kernel_param["alpha"]
@@ -126,30 +136,30 @@ class autoAdapter():
         except KeyError:
             c = 2.0
 
-        K_XX = (tf.reduce_sum(alpha * (f_of_X[:-1] * f_of_X[1:]), 1) + c)
+        K_XX = (tf.reduce_sum(alpha * (X_src[:-1] * X_src[1:]), 1) + c)
         K_XX_mean = tf.reduce_mean(tf.pow(K_XX,d))
 
-        K_YY = (tf.reduce_sum(alpha * (f_of_Y[:-1] * f_of_Y[1:]), 1) + c)
+        K_YY = (tf.reduce_sum(alpha * (X_tar[:-1] * X_tar[1:]), 1) + c)
         K_YY_mean = tf.reduce_mean(tf.pow(K_YY,d))
 
-        K_XY = (tf.reduce_sum(alpha * (f_of_X[:-1] * f_of_Y[1:]), 1) + c)
+        K_XY = (tf.reduce_sum(alpha * (X_src[:-1] * X_tar[1:]), 1) + c)
         K_XY_mean = tf.reduce_mean(tf.pow(K_XY,d))
 
-        K_YX = (tf.reduce_sum(alpha * (f_of_Y[:-1] * f_of_X[1:]), 1) + c)
+        K_YX = (tf.reduce_sum(alpha * (X_tar[:-1] * X_src[1:]), 1) + c)
         K_YX_mean = tf.reduce_mean(tf.pow(K_YX,d))
 
         loss = K_XX_mean + K_YY_mean - K_XY_mean - K_YX_mean
         return loss
 
 
-    def mix_rbf_mmd2(self, X_src, X_tar, sigma_list, biased=True):
+    def mix_rbf_mmd2(self, X_src, X_tar, sigma_list, biased=False):
         """
         
-        :param X_src: 
-        :param X_tar: 
+        :param X_src: 2d tensor with shape=[#batch_src, new_dim]
+        :param X_tar: 2d atensor with shape=[#batch_tar, new_dim]
         :param sigma_list: 
         :param biased: 
-        :return: 
+        :return: rbf mmd loss
         """
         # K_SS, K_ST, K_TT, d
         K_XX, K_XY, K_YY, d = self._mix_rbf_kernel(X_src, X_tar, sigma_list)
@@ -173,6 +183,13 @@ class autoAdapter():
         :param onehot: 
         :return: 
         """
+        loss_mmds = None
+        loss_srcs = None
+        iters = None
+        if plot == True:
+            loss_mmds = []
+            loss_srcs = []
+            iters = []
         with tf.Graph().as_default() as g:
             global_step = tf.Variable(0, trainable=False)
             X_src_placeholder = tf.placeholder(shape=[self.batch_size_src, self.input_dim], dtype=tf.float32, name='Xsrc')
@@ -184,9 +201,9 @@ class autoAdapter():
             loss_y = tf.nn.softmax_cross_entropy_with_logits(logits=output, labels=y_placeholder)
             if self.kernel_type == 'linear':
                 loss_mmd = self.linear_mmd2(hidden_src, hidden_tar)
-            if self.kernel_type == 'poly':
+            elif self.kernel_type == 'poly':
                 loss_mmd = self.poly_mmd2(hidden_src, hidden_tar, self.kernel_param)
-            if self.kernel_type == 'rbf':
+            elif self.kernel_type == 'rbf':
                 if self.sigma_list is None:
                     raise ValueError("sigma list is None??")
                 loss_mmd = self.mix_rbf_mmd2(hidden_src, hidden_tar, sigma_list=self.sigma_list)
@@ -197,13 +214,16 @@ class autoAdapter():
 
             if self.optimizer == 'GD':
                 train_step = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
-                grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
+                # grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
 
+            elif self.optimizer == 'Adam':
+                train_step = tf.train.AdamOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
+                # grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
+            elif self.optimizer == 'Adg':
+                train_step = tf.train.AdagradOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
             else:
-                train_step = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
-                grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
-            with tf.control_dependencies([train_step]):
-                train_op = tf.no_op(name='train')
+                train_step = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(loss,
+                                                                                            global_step=global_step)
 
             saver = tf.train.Saver()
             with tf.Session() as sess:
@@ -226,6 +246,11 @@ class autoAdapter():
                                                               })
                     acc = accuracy_score(np.argmax(output_, 1),
                                          np.argmax(ys, 1))
+
+                    if plot == True:
+                        loss_mmds.append(self.mmd(hidden_src_, hidden_tar_))
+                        loss_srcs.append(loss_y_mean_)
+                        iters.append(i)
                     if i%self.print_step == 0:
                         print("After {} training steps\n loss_mmd on training batch is:{}"
                               "\n loss_y on training batch is:{}"
@@ -234,8 +259,26 @@ class autoAdapter():
                         print("mmd: ", self.mmd(hidden_src_, hidden_tar_))
                     if i%self.save_step == 0:
                         saver.save(sess, os.path.join(MODEL_SAVE_PATH, MODEL_NAME), global_step=global_step)
+        if plot == True:
+            fig = plt.figure(figsize=(8, 4))
+            ax1 = fig.add_subplot(111)
+            p1, = ax1.plot(iters, np.array(loss_mmds) / max(loss_mmds), 'b-', label='mmd')
+            ax1.set_ylabel('MMD')
+            ax1.set_title("Iters")
+            ax1.yaxis.label.set_color(p1.get_color())
+            ax2 = ax1.twinx()
+            p2, = ax2.plot(iters, np.array(loss_srcs) / max(loss_srcs), 'g--', label='src loss')
+            ax2.set_ylabel("Loss SRC")
+            ax2.yaxis.label.set_color(p2.get_color())
+            plt.show()
+            plt.savefig('./demo.png')
 
     def transform(self, X):
+        """
+        
+        :param X: 2d array-like, original feature Matrix to transform.
+        :return: 2d array-like, new feature Matrix.
+        """
         with tf.Graph().as_default() as g:
             x = tf.placeholder(tf.float32, [
                 len(X),
@@ -259,45 +302,37 @@ class autoAdapter():
 
 
     ###############################################################################
-    # Helper functions to compute variances based on kernel matrices
+    # Helper functions
     ################################################################################
 
     def _mmd2(self, K_XX, K_XY, K_YY, const_diagonal = False, biased = False):
-        """
-        
-        :param K_XX: 
-        :param K_XY: 
-        :param K_YY: 
-        :param const_diagonal: 
-        :param biased: 
-        :return: 
-        """
-        m = K_XX.shape[0]
+
+        m = tf.cast(K_XX.shape[0], dtype='float32')
         if const_diagonal is not False:
             diag_X = diag_Y = const_diagonal
             sum_diag_X = sum_diag_Y = m * const_diagonal
         else:
-            diag_X = tf.diag(K_XX)  # (m,)
-            diag_Y = tf.diag(K_YY)  # (m,)
+            diag_X = tf.diag_part(K_XX)  # (m,)
+            diag_Y = tf.diag_part(K_YY)  # (m,)
             sum_diag_X = tf.reduce_sum(diag_X)
             sum_diag_Y = tf.reduce_sum(diag_Y)
 
-        Kt_XX_sums = tf.reduce_sum(K_XX, axis=1) - diag_X  # \tilde{K}_XX * e = K_XX * e - diag_X
-        Kt_YY_sums = tf.reduce_sum(K_YY, axis=1) - diag_Y  # \tilde{K}_YY * e = K_YY * e - diag_Y
-        K_XY_sums_0 = tf.reduce_sum(K_XY, axis=0)  # K_{XY}^T * e
+        Kt_XX_sums = tf.reduce_sum(K_XX, axis=1) - diag_X
+        Kt_YY_sums = tf.reduce_sum(K_YY, axis=1) - diag_Y
+        K_XY_sums_0 = tf.reduce_sum(K_XY, axis=0)
 
-        Kt_XX_sum = tf.reduce_sum(Kt_XX_sums)  # e^T * \tilde{K}_XX * e
-        Kt_YY_sum = tf.reduce_sum(Kt_YY_sums)  # e^T * \tilde{K}_YY * e
-        K_XY_sum = tf.reduce_sum(K_XY_sums_0)  # e^T * K_{XY} * e
+        Kt_XX_sum = tf.reduce_sum(Kt_XX_sums)
+        Kt_YY_sum = tf.reduce_sum(Kt_YY_sums)
+        K_XY_sum = tf.reduce_sum(K_XY_sums_0)
 
         if biased:
-            mmd2 = ((Kt_XX_sum + sum_diag_X) / (m * m)
-                    + (Kt_YY_sum + sum_diag_Y) / (m * m)
-                    - 2.0 * K_XY_sum / (m * m))
+            mmd2 = (Kt_XX_sum + sum_diag_X) / (m * m) \
+                    + (Kt_YY_sum + sum_diag_Y) / (m * m) \
+                    - tf.constant(2.0) * K_XY_sum / (m * m)
         else:
-            mmd2 = (Kt_XX_sum / (m * (m - 1))
-                    + Kt_YY_sum / (m * (m - 1))
-                    - 2.0 * K_XY_sum / (m * m))
+            mmd2 = Kt_XX_sum / (m * (m - 1)) \
+                    + Kt_YY_sum / (m * (m - 1)) \
+                    - tf.constant(2.0) * K_XY_sum / (m * m)
 
         return mmd2
 
@@ -315,9 +350,10 @@ class autoAdapter():
         m = X_src.shape[0]
         Z = tf.concat((X_src, X_tar), 0)
         ZZT = tf.matmul(Z, tf.transpose(Z))
-        diag_ZZT = tf.diag(ZZT)
+        diag_ZZT = tf.expand_dims(tf.diag_part(ZZT), 1)
 
-        Z_norm_sqr = diag_ZZT.expand_as(ZZT)
+        # Z_norm_sqr = diag_ZZT.expand_as(ZZT)
+        Z_norm_sqr = diag_ZZT
         exponent = Z_norm_sqr - 2 * ZZT + Z_norm_sqr
 
         K = 0.0
@@ -328,16 +364,14 @@ class autoAdapter():
         return K[:m, :m], K[:m, m:], K[m:, m:], len(sigma_list)
 
 
-    def _mmd2_and_variance(self):
-
-        pass
+    # def _mmd2_and_variance(self):
+    #
+    #     pass
 
     def _transformlabel(self, y, n_classes):
         """
+        transform non-one-hot labels to one-hot.
         
-        :param y: 
-        :param n_classes: 
-        :return: 
         """
         label_ = np.zeros([len(y), n_classes])
         for i in range(len(y)):

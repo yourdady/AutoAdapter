@@ -16,6 +16,11 @@ image = data['data'][:, 4, 5].reshape(16, 16).T
 
 class load_mnist():
     def __init__(self, validation_size = 5000, one_hot = False):
+        """
+        
+        :param validation_size: number of validation samples, #train + #validation = 55000
+        :param one_hot: bool, if true, get one-hot label.
+        """
         mnist = read_data_sets("data/", one_hot=one_hot, validation_size=validation_size)
         self.dataset = mnist
 
@@ -26,11 +31,9 @@ def parse_data():
     for i in range(11000):
         img = Image.fromarray(tmp[0][i])
 
-        #将usps同样转化为28*28
 
         img = np.array(img.resize((28, 28)))
         img = np.array(img)
-        # img = np.multiply(img, 1.0 / 255.0)
 
         input_x.append(img.T)
     input_x = [input_x]
