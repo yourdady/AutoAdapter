@@ -259,6 +259,7 @@ class autoAdapter():
                         print("mmd: ", self.mmd(hidden_src_, hidden_tar_))
                     if i%self.save_step == 0:
                         saver.save(sess, os.path.join(MODEL_SAVE_PATH, MODEL_NAME), global_step=global_step)
+
         if plot == True:
             fig = plt.figure(figsize=(8, 4))
             ax1 = fig.add_subplot(111)
@@ -270,8 +271,8 @@ class autoAdapter():
             p2, = ax2.plot(iters, np.array(loss_srcs) / max(loss_srcs), 'g--', label='src loss')
             ax2.set_ylabel("Loss SRC")
             ax2.yaxis.label.set_color(p2.get_color())
-            plt.show()
             plt.savefig('./demo.png')
+            plt.show()
 
     def transform(self, X):
         """
