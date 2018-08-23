@@ -4,7 +4,8 @@ An nn-based model for domain adaptation, which works by minimizing
 the training loss of source domain and mmd distance between
 source and target at the same time.
 The relationship between autoAdapter and TCA is similaer to the relationship
-between autoEncoder and PCA.
+between autoEncoder and PCA. \
+[BDA(TCA, JDA) code](https:/github.com/yourdady/DomainAdaptation/).
 ## HOW TO USE
 ```python
 aa = autoAdapter()
