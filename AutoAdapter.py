@@ -15,7 +15,7 @@ MODEL_NAME = 'model.ckpt'
 class autoAdapter():
     def __init__(self, input_dim, new_dim, n_classes, model_path = None, lamb = 0.01, learning_rate = 0.01
                  , batch_size_src = 128, batch_size_tar = 128, training_steps = 5000, l2 = 0.001,
-                 optimizer = 'GD', save_step = 20, print_step = 20, kernel_type = 'linear', sigma_list=None,
+                 optimizer = 'GD', save_step = 100, print_step = 20, kernel_type = 'linear', sigma_list=None,
                  ** kernel_param):
         """
         An auto Adapter to minimize the training loss on source data MMD between 2 source and target 
@@ -214,11 +214,8 @@ class autoAdapter():
 
             if self.optimizer == 'GD':
                 train_step = tf.train.GradientDescentOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
-                # grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
-
             elif self.optimizer == 'Adam':
                 train_step = tf.train.AdamOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
-                # grad = tf.train.GradientDescentOptimizer(self.learning_rate).compute_gradients(loss)
             elif self.optimizer == 'Adg':
                 train_step = tf.train.AdagradOptimizer(self.learning_rate).minimize(loss,global_step=global_step)
             else:

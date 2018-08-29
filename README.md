@@ -1,10 +1,10 @@
 # AutoAdapter
 ## INTRODUCTION
-An nn-based model for domain adaptation, which works by minimizing
+AutoAdapter is an nn-based model for domain adaptation, which works by minimizing
 the training loss of source domain and mmd distance between
 source and target at the same time.
-The relationship between autoAdapter and TCA is similaer to the relationship
-between autoEncoder and PCA. \
+The relationship between autoAdapter and TCA is similar to the relationship
+between autoEncoder and PCA.
 [code of BDA(TCA, JDA)](https:/github.com/yourdady/DomainAdaptation/).
 ## HOW TO USE
 ```python
@@ -16,8 +16,8 @@ aa.fit(data_src, data_tar, onehot, plot)
 new_feats = aa.transform(feats)
 #data_src, data_tar are instances of class which contains a dataset member.
 ```
-## VISULIZATION
-![Alt text](./1534986353.jpg)
+## VISUALIZATION
+![Alt text](./demo.png)
 ## REFERENCE
 [1] *Ghifary M, Kleijn W B, Zhang M. Domain Adaptive Neural Networks for Object Recognition[J]. 2014, 8862:898-904.*
 ## CONCAT
