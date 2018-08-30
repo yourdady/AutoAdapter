@@ -5,7 +5,7 @@ the training loss of source domain and mmd distance between
 source and target at the same time.
 The relationship between autoAdapter and TCA is similar to the relationship
 between autoEncoder and PCA.
-[code of BDA(TCA, JDA)](https:/github.com/yourdady/DomainAdaptation/).
+[code of BDA(TCA, JDA)](/yourdady/DomainAdaptation/).
 ## HOW TO USE
 ```python
 aa = autoAdapter(input_dim, new_dim, n_classes, model_path = None, lamb = 0.01, learning_rate = 0.01
